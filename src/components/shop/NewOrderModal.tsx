@@ -6,8 +6,14 @@ import Fuse from "fuse.js";
 import CreateNewUserModal from "@/components/shop/CreateNewUserModal";
 import styles from "@/styles/components/shop/NewOrderModal.module.css";
 import { checkRoles, UserRole, type User } from "@/types/user";
-import { Campus, type Product, type ProductVariant, type Order } from "@/types/shop";
-import { isColorKey, splitNameHex } from "@/utils/shopUtils";
+import { Order, Campus } from "@/types/shop/order";
+import { Product, ProductVariant } from "@/types/shop/product";
+import {
+  getOrderKindFromItems,
+  getOrderKindFromCategory,
+  getOrderKindRules,
+} from "@/utils/shop/orderKindUtils";
+import { isColorKey, splitNameHex } from "@/utils/shop/shopUtils";
 import ConfirmDialog from "@/components/layout/ConfirmDialog";
 import { useUser } from "@/context/UserContext";
 
@@ -139,9 +145,31 @@ export default function NewOrderModal({
   const productDropdownRef = useRef<HTMLDivElement>(null);
 
   const uniqueProducts = useMemo(
-    () => Array.from(new Map(products.map((p) => [p.id, p])).values()),
+    () =>
+      Array.from(
+        new Map(
+          products
+            .filter((product) =>
+              getOrderKindRules(
+                getOrderKindFromCategory(product.category),
+                "pos"
+              ).allowedSources.includes("pos")
+            )
+            .map((p) => [p.id, p])
+        ).values()
+      ),
     [products]
   );
+
+  const selectedOrderClassification = useMemo(
+    () => getOrderKindFromItems(selectedProducts.map((item) => item.product)),
+    [selectedProducts]
+  );
+
+  const isUserRequiredForSelectedOrder = getOrderKindRules(
+    selectedOrderClassification.orderKind,
+    "pos"
+  ).requiresUserAssignment;
 
   const productFuse = useMemo(
     () =>
@@ -381,20 +409,25 @@ export default function NewOrderModal({
     | { status: "error"; message: string };
 
   const submitOrder = async (stockOverride = false): Promise<SubmitResult> => {
+    const selectedOrderKind = selectedOrderClassification.orderKind;
+    const specialPosPaymentMethods = getOrderKindRules(selectedOrderKind, "pos").paymentMethods;
+
     const payload = {
-      user_istid: selectedUser?.istid,
-      customer_name: selectedUser?.name,
-      customer_email: selectedUser?.email,
+      user_istid: isUserRequiredForSelectedOrder ? selectedUser?.istid : undefined,
+      customer_name: selectedUser?.name ?? "Cliente POS",
+      customer_email: isUserRequiredForSelectedOrder ? selectedUser?.email : undefined,
       customer_phone: phone || undefined,
       customer_nif: nif || undefined,
       campus: campus || undefined,
       notes: notes || undefined,
       stock_override: stockOverride,
+      payment_method: !isEditMode ? specialPosPaymentMethods?.[0] : undefined,
       items: selectedProducts.map(({ product, variant, quantity }) => ({
         product_id: product.id,
         variant_id: variant.id || undefined,
         quantity,
       })),
+      order_source: "pos",
     };
 
     const endpoint =
@@ -434,7 +467,11 @@ export default function NewOrderModal({
       setError("Por favor, selecione o campus.");
       return;
     }
-    if (!isEditMode && !selectedUser) {
+    if (selectedOrderClassification.isMixedInvalid) {
+      setError("Este pedido nao pode misturar categorias especiais com outras categorias.");
+      return;
+    }
+    if (!isEditMode && isUserRequiredForSelectedOrder && !selectedUser) {
       // TODO: (ERROR)
       setError("Por favor, selecione um utilizador.");
       return;
@@ -443,7 +480,6 @@ export default function NewOrderModal({
     setError(null);
 
     try {
-      //TODO: (LOADING)
       const orderResponse = await submitOrder(stockOverride);
 
       if (orderResponse.status === "stock_override") {

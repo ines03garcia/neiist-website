@@ -3,18 +3,16 @@ import { Membership, dbMembership, mapdbMembershipToMembership } from "@/types/m
 import { User, mapRoleToUserRole, mapdbUserToUser } from "@/types/user";
 import {
   Product,
-  dbProduct,
   ProductVariant,
-  mapdbProductToProduct,
+  dbProduct,
   dbProductVariant,
-  Order,
-  dbOrder,
-  mapdbOrderToOrder,
-  OrderStatus,
-  Category,
-  dbCategory,
-  mapdbCategoryToCategory,
-} from "@/types/shop";
+  mapdbProductToProduct,
+} from "@/types/shop/product";
+import { Order, dbOrder, mapdbOrderToOrder } from "@/types/shop/order";
+import { OrderStatus } from "@/types/shop/orderStatus";
+import { Category, dbCategory, mapdbCategoryToCategory } from "@/types/shop/category";
+import { isSpecialCategory } from "@/utils/shop/orderKindUtils";
+import { SPECIAL_CATEGORIES } from "@/types/shop/orderKind";
 import {
   CalendarEvent,
   EventSubscriber,
@@ -669,9 +667,12 @@ export const addProductVariant = async (
   return row ? mapdbProductToProduct(row) : null;
 };
 
-export const getAllProducts = async (): Promise<Product[]> => {
+export const getAllProducts = async (includeSpecial: boolean = false): Promise<Product[]> => {
   const { rows } = await db_query<dbProduct>(`SELECT * FROM neiist.get_all_products()`);
-  return rows.map(mapdbProductToProduct);
+  const products = rows.map(mapdbProductToProduct);
+  return includeSpecial
+    ? products
+    : products.filter((product) => !isSpecialCategory(product.category));
 };
 
 export const getAllProductsAdmin = async (): Promise<Product[]> => {
@@ -873,10 +874,11 @@ export const setOrderState = async (
   return row ? mapdbOrderToOrder(row) : null;
 };
 
-export const getAllCategories = async (): Promise<Category[]> => {
+export const getAllCategories = async (includeSpecial: boolean = false): Promise<Category[]> => {
+  await Promise.all(SPECIAL_CATEGORIES.map((categoryName) => addCategory(categoryName)));
   try {
     const { rows } = await db_query<Category>("SELECT * FROM neiist.get_all_categories()");
-    return rows;
+    return includeSpecial ? rows : rows.filter((category) => !isSpecialCategory(category.name));
   } catch (error) {
     console.error("Error fetching categories:", error);
     return [];

@@ -7,14 +7,16 @@ import {
   getOrderById,
 } from "@/utils/dbUtils";
 import { UserRole } from "@/types/user";
-import { getStatusLabel, PAYMENT_METHODS } from "@/types/shop";
+import { getOrderKindRules, getOrderKindFromItems } from "@/utils/shop/orderKindUtils";
+import { getStatusLabel } from "@/utils/shop/orderStatusUtils";
+import { PAYMENT_METHODS } from "@/types/shop/payment";
 import { serverCheckRoles } from "@/utils/permissionUtils";
 import type { User } from "@/types/user";
-import type { Order } from "@/types/shop";
+import { Order } from "@/types/shop/order";
 import {
-  getOrderPaidTemplate,
-  getOrderPendingTemplate,
-  getOrderStatusUpdateTemplate,
+  getPaidOrderEmailTemplate,
+  getPendingOrderEmailTemplate,
+  getStatusUpdateOrderEmailTemplate,
   sendEmail,
 } from "@/utils/emailUtils";
 
@@ -172,11 +174,18 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       await updateUser(order.user_istid, { phone: phone || null });
 
     if (onlyInPersonSwitch && updatedOrder.customer_email) {
+      if (
+        !getOrderKindRules(getOrderKindFromItems(updatedOrder.items).orderKind)
+          .customerEmailsEnabled
+      )
+        return NextResponse.json(updatedOrder);
+
       try {
         await sendEmail({
           to: updatedOrder.customer_email,
           subject: `Encomenda ${updatedOrder.order_number} - Pendente`,
-          html: getOrderPendingTemplate(
+          html: getPendingOrderEmailTemplate(
+            getOrderKindFromItems(updatedOrder.items).orderKind,
             updatedOrder.order_number,
             updatedOrder.customer_name,
             updatedOrder.items,
@@ -219,8 +228,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   try {
     const body = await request.json();
     const { status } = body;
-    const { id } = await params;
-    const orderId = parseInt(id, 10);
+    const orderId = Number((await params).id);
     if (!status) return NextResponse.json({ error: "No status provided" }, { status: 400 });
 
     const order = await getOrderById(orderId);
@@ -233,11 +241,18 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (updatedOrder?.customer_email) {
       const statusLabel = getStatusLabel(status);
       const isPaid = status === "paid";
+      if (
+        !getOrderKindRules(getOrderKindFromItems(updatedOrder.items).orderKind)
+          .customerEmailsEnabled
+      )
+        return NextResponse.json(updatedOrder);
+
       await sendEmail({
         to: updatedOrder.customer_email,
         subject: `Encomenda ${updatedOrder.order_number} - ${statusLabel}`,
         html: isPaid
-          ? getOrderPaidTemplate(
+          ? getPaidOrderEmailTemplate(
+              getOrderKindFromItems(updatedOrder.items).orderKind,
               updatedOrder.order_number,
               updatedOrder.customer_name,
               updatedOrder.items,
@@ -246,7 +261,8 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
               updatedOrder.payment_method,
               updatedOrder.payment_reference
             )
-          : getOrderStatusUpdateTemplate(
+          : getStatusUpdateOrderEmailTemplate(
+              getOrderKindFromItems(updatedOrder.items).orderKind,
               updatedOrder.order_number,
               updatedOrder.customer_name,
               status,
@@ -281,7 +297,7 @@ export async function DELETE(
 
   if (
     !isOrderOwner(order, user!) &&
-    !roles?.some((r) => [UserRole._ADMIN, UserRole._COORDINATOR].includes(r))
+    !roles?.some((role) => [UserRole._ADMIN, UserRole._COORDINATOR].includes(role))
   ) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
